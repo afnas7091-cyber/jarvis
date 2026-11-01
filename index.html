@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ta">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JARVIS</title>
+<style>
+:root{--bg:#07131c;--panel:#0d2230;--line:#164a63;--cyan:#3de0ff;--text:#d9f4ff;--dim:#7fa6b8;--me:#12384d}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Noto Sans Tamil",sans-serif;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+header{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
+.core{width:14px;height:14px;border-radius:50%;background:var(--dim);transition:.3s;flex:none}
+.core.listen{background:var(--cyan);box-shadow:0 0 0 6px rgba(61,224,255,.2),0 0 18px var(--cyan)}
+.core.think{background:#ffc94d;box-shadow:0 0 14px #ffc94d}
+.core.speak{background:#6dff9c;box-shadow:0 0 0 6px rgba(109,255,156,.2),0 0 18px #6dff9c}
+h1{font-size:17px;margin:0 0 0 4px;letter-spacing:.2em;flex:1}
+button{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+button.act{border-color:var(--cyan);background:var(--me)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--cyan)}
+#log{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.m{max-width:88%;padding:10px 14px;border-radius:14px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.m.me{align-self:flex-end;background:var(--me)}
+.m.ai{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.m.sys{align-self:center;color:var(--dim);font-size:14px;text-align:center}
+.m img{max-width:100%;border-radius:8px;display:block;margin-bottom:6px}
+footer{display:flex;gap:6px;padding:10px;border-top:1px solid var(--line)}
+input[type=text],input[type=password]{flex:1;min-width:0;font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+#mic{width:50px;font-size:21px;background:var(--cyan);color:#04202b;border:none}
+#mic.on{background:#ff6b6b}
+.pane{display:none;flex-direction:column;gap:8px;padding:12px;border-bottom:1px solid var(--line);max-height:42vh;overflow-y:auto}
+.pane.show{display:flex}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+small{color:var(--dim)}
+#prev{display:none;align-items:center;gap:8px;padding:6px 12px;border-top:1px solid var(--line)}
+#prev img{height:44px;border-radius:6px}
+</style>
+</head>
+<body>
+<header>
+  <div class="core" id="core"></div>
+  <h1>JARVIS</h1>
+  <button id="bConv" aria-label="தொடர் உரையாடல்">🔁</button>
+  <button id="bVoice" aria-label="குரல்">🔊</button>
+  <button id="bNotes" aria-label="Notes">📝</button>
+  <button id="bKey" aria-label="API key">🔑</button>
+</header>
+
+<div class="pane" id="pKey">
+  <label for="key">Gemini API key ஐ இங்கே ஒட்டுங்க</label>
+  <input id="key" type="password" placeholder="AIza..." autocomplete="off">
+  <button id="save">Save</button>
+  <small>Key இந்த போனிலேயே மட்டும் சேமிக்கப்படும்.</small>
+</div>
+
+<div class="pane" id="pNotes">
+  <strong>Notes</strong><div id="noteList"></div>
+  <strong>Reminders</strong><div id="remList"></div>
+  <small>"இதை note பண்ணு" அல்லது "10 நிமிஷத்துல நினைவூட்டு" னு சொல்லுங்க. Reminder, app திறந்திருக்கும்போது மட்டுமே ஒலிக்கும்.</small>
+</div>
+
+<div id="log"></div>
+<div id="prev"><img id="prevImg" alt=""><small>Photo தயார். கேள்வி கேளுங்க.</small><button id="prevX">✕</button></div>
+<footer>
+  <button id="cam" aria-label="Camera">📷</button>
+  <input id="txt" type="text" placeholder="கேளுங்க…" autocomplete="off">
+  <button id="send">Send</button>
+  <button id="mic" aria-label="Speak">🎤</button>
+</footer>
+<input id="file" type="file" accept="image/*" capture="environment" hidden>
+
+<script>
+const $=id=>document.getElementById(id);
+const log=$('log'),core=$('core');
+const ls={get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+let key=ls.get('jv_key',''),voiceOn=true,conv=false,listening=false,busy=false,pendingImg=null;
+let history=[],notes=ls.get('jv_notes',[]),rems=ls.get('jv_rems',[]);
+const MODELS=['gemini-2.5-flash','gemini-2.0-flash'];
+
+function sys(){
+  return "நீ JARVIS, என் personal AI assistant. பயனர் பேசும் மொழியிலேயே (தமிழ் அல்லது English) பதில் சொல். பதில்கள் சுருக்கமாக, பேசுவதற்கு ஏற்ற எளிய நடையில் இருக்கட்டும். Markdown, emoji, நட்சத்திரக்குறி பயன்படுத்தாதே. இப்போதைய நேரம்: "+new Date().toLocaleString('en-IN')+". புதிய தகவல், செய்தி, வானிலைக்கு Google Search பயன்படுத்து. பயனர் ஒன்றை note செய்யச் சொன்னால் பதிலின் இறுதியில் [[NOTE: உரை]] என்று சேர். நினைவூட்டச் சொன்னால் [[REMIND: இப்போதிலிருந்து எத்தனை நிமிடம் | உரை]] என்று சேர் (நிமிடம் எண்ணாக மட்டும்). மற்ற நேரங்களில் இந்த tags பயன்படுத்தாதே. Email அல்லது message எழுதச் சொன்னால் முழு வரைவையும் எழுது.";
+}
+function add(cls,t,img){const d=document.createElement('div');d.className='m '+cls;if(img){const i=document.createElement('img');i.src=img;d.appendChild(i);}d.appendChild(document.createTextNode(t));log.appendChild(d);log.scrollTop=log.scrollHeight;return d;}
+function state(s){core.className='core '+(s||'');}
+function pane(id){['pKey','pNotes'].forEach(p=>$(p).classList.toggle('show',p===id&&!$(p).classList.contains('show')));}
+
+/* ---- notes & reminders ---- */
+function renderLists(){
+  $('noteList').innerHTML='';$('remList').innerHTML='';
+  if(!notes.length)$('noteList').innerHTML='<small>இன்னும் notes இல்ல</small>';
+  notes.forEach((n,i)=>{const r=document.createElement('div');r.className='row';const s=document.createElement('span');s.textContent=n;const b=document.createElement('button');b.textContent='✕';b.onclick=()=>{notes.splice(i,1);ls.set('jv_notes',notes);renderLists();};r.append(s,b);$('noteList').appendChild(r);});
+  if(!rems.length)$('remList').innerHTML='<small>Reminders இல்ல</small>';
+  rems.forEach((m,i)=>{const r=document.createElement('div');r.className='row';const s=document.createElement('span');s.textContent=new Date(m.due).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})+' · '+m.text;const b=document.createElement('button');b.textContent='✕';b.onclick=()=>{rems.splice(i,1);ls.set('jv_rems',rems);renderLists();};r.append(s,b);$('remList').appendChild(r);});
+}
+function fire(m){
+  rems=rems.filter(x=>x.id!==m.id);ls.set('jv_rems',rems);renderLists();
+  add('ai','⏰ நினைவூட்டல்: '+m.text);speak('நினைவூட்டல். '+m.text);
+  try{if('Notification' in window&&Notification.permission==='granted')new Notification('JARVIS',{body:m.text});}catch(e){}
+  if(navigator.vibrate)navigator.vibrate([300,150,300]);
+}
+function arm(m){const ms=m.due-Date.now();if(ms<=0){fire(m);return;}setTimeout(()=>{if(rems.some(x=>x.id===m.id))fire(m);},ms);}
+function actions(t){
+  t=t.replace(/\[\[NOTE:\s*([\s\S]*?)\]\]/g,(_,x)=>{notes.push(x.trim());ls.set('jv_notes',notes);add('sys','📝 Note சேமிக்கப்பட்டது');return '';});
+  t=t.replace(/\[\[REMIND:\s*(\d+(?:\.\d+)?)\s*\|\s*([\s\S]*?)\]\]/g,(_,min,x)=>{
+    const m={id:Date.now()+Math.random(),due:Date.now()+parseFloat(min)*60000,text:x.trim()};
+    rems.push(m);ls.set('jv_rems',rems);arm(m);add('sys','⏰ '+min+' நிமிடத்தில் நினைவூட்டுவேன்');
+    try{if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();}catch(e){}
+    return '';});
+  renderLists();return t.trim();
+}
+
+/* ---- voice out ---- */
+function speak(t){
+  if(!voiceOn||!('speechSynthesis' in window)){after();return;}
+  speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(t);
+  u.lang=/[\u0B80-\u0BFF]/.test(t)?'ta-IN':'en-IN';
+  u.onstart=()=>state('speak');u.onend=()=>{state('');after();};u.onerror=()=>{state('');after();};
+  speechSynthesis.speak(u);
+}
+function after(){if(conv&&!busy&&!listening)setTimeout(listen,400);}
+
+/* ---- ask Gemini ---- */
+async function ask(q){
+  if(!key){pane('pKey');add('sys','API key தேவை.');return;}
+  if(busy)return;busy=true;
+  const img=pendingImg;clearImg();
+  add('me',q,img&&('data:image/jpeg;base64,'+img));state('think');
+  const parts=[{text:q}];if(img)parts.unshift({inlineData:{mimeType:'image/jpeg',data:img}});
+  history.push({role:'user',parts});
+  const wait=add('ai','…');let err='';
+  for(let i=0;i<MODELS.length;i++){
+    try{
+      const body={systemInstruction:{parts:[{text:sys()}]},contents:history.slice(-16)};
+      if(i===0)body.tools=[{google_search:{}}];
+      const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+MODELS[i]+':generateContent',{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify(body)});
+      const j=await r.json();
+      if(!r.ok){err=(j.error&&j.error.message)||('Error '+r.status);continue;}
+      const raw=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts||[]).map(p=>p.text||'').join('')||'பதில் கிடைக்கவில்லை.';
+      history.push({role:'model',parts:[{text:raw}]});
+      history.forEach(h=>h.parts.forEach(p=>{if(p.inlineData&&h!==history[history.length-2])delete p.inlineData.data,p.inlineData&&(p.text='(photo)')}));
+      const clean=actions(raw)||'சரி.';
+      wait.textContent=clean;busy=false;state('');speak(clean);return;
+    }catch(e){err='Internet இணைப்பை சரிபாருங்க.';}
+  }
+  history.pop();busy=false;
+  wait.textContent='பிழை: '+err;wait.className='m sys';state('');
+}
+function send(){const q=$('txt').value.trim();if(!q&&!pendingImg)return;$('txt').value='';ask(q||'இந்த photo-ல என்ன இருக்கு?');}
+
+/* ---- camera ---- */
+function clearImg(){pendingImg=null;$('prev').style.display='none';$('file').value='';}
+$('cam').onclick=()=>$('file').click();
+$('prevX').onclick=clearImg;
+$('file').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  const im=new Image(),u=URL.createObjectURL(f);
+  im.onload=()=>{const s=Math.min(1,1024/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*s;c.height=im.height*s;c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+    const d=c.toDataURL('image/jpeg',.8);pendingImg=d.split(',')[1];$('prevImg').src=d;$('prev').style.display='flex';URL.revokeObjectURL(u);};
+  im.src=u;
+};
+
+/* ---- voice in ---- */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;let rec=null;
+if(SR){
+  rec=new SR();rec.lang='ta-IN';rec.interimResults=false;
+  rec.onstart=()=>{listening=true;$('mic').classList.add('on');state('listen');};
+  rec.onend=()=>{listening=false;$('mic').classList.remove('on');if(core.className.includes('listen'))state('');};
+  rec.onresult=e=>ask(e.results[0][0].transcript);
+  rec.onerror=e=>{if(e.error!=='no-speech'&&e.error!=='aborted'){conv=false;$('bConv').classList.remove('act');add('sys','Mic பிழை: '+e.error+' (Mic permission கொடுத்தீங்களா?)');}else after();};
+}
+function listen(){if(!rec||listening||busy)return;speechSynthesis.cancel();try{rec.start();}catch(e){}}
+$('mic').onclick=()=>{if(!rec){add('sys','இந்த browser-ல voice input இல்ல. Chrome பயன்படுத்துங்க.');return;}listening?rec.stop():listen();};
+
+/* ---- buttons ---- */
+$('bKey').onclick=()=>pane('pKey');
+$('bNotes').onclick=()=>{renderLists();pane('pNotes');};
+$('bVoice').onclick=()=>{voiceOn=!voiceOn;$('bVoice').textContent=voiceOn?'🔊':'🔇';if(!voiceOn)speechSynthesis.cancel();};
+$('bConv').onclick=()=>{conv=!conv;$('bConv').classList.toggle('act',conv);add('sys',conv?'தொடர் உரையாடல் ON: நீங்க பேசி முடிச்சதும் JARVIS பதில் சொல்லி மறுபடி கேட்கும்.':'தொடர் உரையாடல் OFF');if(conv)listen();};
+$('save').onclick=()=>{key=$('key').value.trim();ls.set('jv_key',key);$('key').value='';$('pKey').classList.remove('show');add('sys','Key சேமிக்கப்பட்டது. இப்போ பேசலாம்.');};
+$('send').onclick=send;
+$('txt').addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+
+/* ---- start ---- */
+rems.slice().forEach(arm);renderLists();
+if(!key){$('pKey').classList.add('show');add('sys','முதலில் உங்க API key-ஐ சேமிங்க.');}
+else add('sys','வணக்கம்! நான் JARVIS. 🎤 பேசுங்க, 📷 photo காட்டுங்க, 🔁 தொடர் உரையாடல் ON பண்ணுங்க.');
+</script>
+</body>
+</html>
